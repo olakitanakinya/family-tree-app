@@ -1,0 +1,20 @@
+# Sensitive files
+*.pem
+*.key
+*.cert
+
+# Environment files
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files
+*.log
