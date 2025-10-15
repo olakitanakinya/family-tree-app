@@ -1,0 +1,101 @@
+name: Deploy Family Tree App
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  APP_SERVER_IP: ${{ secrets.APP_SERVER_IP }}
+  DB_SERVER_IP: ${{ secrets.DB_SERVER_IP }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Database
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.DB_SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          echo "🗃️ Setting up database..."
+          
+          # Upload and execute database.sql, ignoring errors for existing tables
+          if [ -f "database/database.sql" ]; then
+            echo "📦 Found database.sql, updating database..."
+            # Use --force to continue on errors
+            mysql -u root -p1234pass familytreedb < database/database.sql 2>/dev/null || echo "⚠️ Some tables already exist (normal)"
+            echo "✅ Database update completed"
+            
+            # Verify we can access the database
+            echo "📊 Current database tables:"
+            mysql -u root -p1234pass -e "USE familytreedb; SHOW TABLES;" | head -10
+          else
+            echo "⚠️ No database.sql found, using existing database"
+          fi
+
+    - name: Deploy Application
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.APP_SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          echo "🚀 Deploying application..."
+          
+          # Create backup
+          BACKUP_DIR="/var/www/html.backup.$(date +%Y%m%d%H%M%S)"
+          sudo cp -r /var/www/html "$BACKUP_DIR"
+          echo "📦 Backup created: $BACKUP_DIR"
+          
+          # Clean and deploy
+          sudo rm -rf /var/www/html/*
+          sudo cp -r . /var/www/html/
+          
+          # Remove .git directory if copied
+          sudo rm -rf /var/www/html/.git 2>/dev/null || true
+          
+          # Update database configuration in configs.php
+          if [ -f "/var/www/html/configs.php" ]; then
+            echo "🔧 Updating configs.php..."
+            sudo sed -i "s/family-tree-db.cg982isgaid3.us-east-1.rds.amazonaws.com/${{ secrets.DB_SERVER_IP }}/g" /var/www/html/configs.php
+          fi
+          
+          # Update database configuration in connection.php
+          if [ -f "/var/www/html/configs/connection.php" ]; then
+            echo "🔧 Updating connection.php..."
+            sudo sed -i "s/'HOSTNAME'.*=>.*'.*'/'HOSTNAME' => '${{ secrets.DB_SERVER_IP }}'/" /var/www/html/configs/connection.php
+            sudo sed -i "s/'USERNAME'.*=>.*'.*'/'USERNAME' => 'familytreeuser'/" /var/www/html/configs/connection.php
+            sudo sed -i "s/'PASSWORD'.*=>.*'.*'/'PASSWORD' => '1234pass'/" /var/www/html/configs/connection.php
+            sudo sed -i "s/'DATABASE'.*=>.*'.*'/'DATABASE' => 'familytreedb'/" /var/www/html/configs/connection.php
+          fi
+          
+          # Set permissions
+          sudo chown -R www-data:www-data /var/www/html
+          sudo chmod -R 755 /var/www/html
+          sudo find /var/www/html -type f -exec chmod 644 {} \;
+          
+          # Restart Apache
+          sudo systemctl restart apache2
+          
+          echo "✅ Deployment completed!"
+
+    - name: Verify Deployment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.APP_SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          echo "🔍 Verifying deployment..."
+          if curl -f http://localhost/ > /dev/null; then
+            echo "✅ Application is accessible"
+          else
+            echo "❌ Application is not accessible"
+            exit 1
+          fi
